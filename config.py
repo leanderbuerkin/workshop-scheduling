@@ -1,0 +1,2 @@
+
+WORKSHOPS_PER_SLOT = 3
