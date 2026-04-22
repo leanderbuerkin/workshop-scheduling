@@ -3,9 +3,6 @@ from random import randint, sample
 from data_structures import Workshop
 from solver import OptimalTimeTableFinder
 
-
-# Use mg.render(mg.stack_vscode(), "debug.png")
-
 def get_random_workshops(workshops_count: int, participants_count: int) -> frozenset[Workshop]:
     participants = [str(index) for index in range(participants_count)]
     return frozenset({
