@@ -6,6 +6,10 @@ from types import MappingProxyType
 frozendict = MappingProxyType
 
 
+# Only allow bigger workshops in same slot
+# Make clean rework
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Workshop:
     index: int
@@ -14,6 +18,9 @@ class Workshop:
     @property
     def score(self) -> int:
         return len(self.participants)
+    
+    def __str__(self) -> str:
+        return f"{self.name} (Score {self.score}): {", ".join(self.participants)}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -84,22 +91,25 @@ class TimeSlot:
         return not(self.is_full) and len(self.addable_workshops) > 0
     @property
     def expansions(self) -> frozenset[TimeSlot]:
+        # todo: check again
+
         if not self.expandable:
             raise Exception("Check Expandability with .expandable before expansion.")
         expanding_workshops = sorted(
             self.addable_workshops,
-            key=lambda workshop: workshop.score
+            key=lambda workshop: workshop.score,
+            reverse=True
         )
         new_time_slots = {TimeSlot(
             workshops=self.workshops,
             addable_workshops=frozenset(),
             workshops_count_target=self.workshops_count_target
         )}
-        while len(expanding_workshops) > 0:
-            expanding_workshop = expanding_workshops.pop()
+
+        for index, expanding_workshop in enumerate(self.addable_workshops):
             new_time_slots.add(TimeSlot(
                 workshops=frozenset(self.workshops | {expanding_workshop}),
-                addable_workshops=frozenset(expanding_workshops),
+                addable_workshops=frozenset(expanding_workshops[index + 1:]),
                 workshops_count_target=self.workshops_count_target
             ))
         return frozenset(new_time_slots)

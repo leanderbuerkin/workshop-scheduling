@@ -30,19 +30,23 @@ class OptimalTimeSlotsFinder:
                 self._finished_time_slots.add(most_promising_time_slot)
 
     def _yield_new_unbeatable_time_slots(self) -> Generator[TimeSlot]:
-        undiscovered_score_upper_bound = max(
-            time_slot.score_upper_bound
-            for time_slot in self._unfinished_time_slots
-        )
+        if len(self._unfinished_time_slots) == 0:
+            undiscovered_score_upper_bound = 0
+        else:
+            undiscovered_score_upper_bound = max(
+                time_slot.score_upper_bound
+                for time_slot in self._unfinished_time_slots
+            )
         for time_slot in sorted(self._finished_time_slots, key=lambda time_slot: time_slot.score, reverse=True):
-            if time_slot.score >= undiscovered_score_upper_bound:
-                self._finished_time_slots.remove(time_slot)
-                self.unbeatable_time_slots.append(time_slot)
-                yield time_slot
-            else:
+            if time_slot.score < undiscovered_score_upper_bound:
                 break
+            self._finished_time_slots.remove(time_slot)
+            self.unbeatable_time_slots.append(time_slot)
+            yield time_slot
 
     def _pop_most_promising_time_slot(self) -> TimeSlot:
+        if not self._unfinished_time_slots:
+            raise ValueError("No unfinished time slot to pop.")
         most_promising_time_slot = max(
             self._unfinished_time_slots,
             key=lambda time_slot: time_slot.score_upper_bound
@@ -101,9 +105,10 @@ class OptimalTimeTableFinder:
                 self._finished_time_tables.add(most_promising_time_table)
 
     def _add_time_slots_if_needed(self):
-        new_time_tables: set[TimeTable] = set()
         while any(time_table.needs_time_slots for time_table in self._unfinished_time_tables):
             new_time_slot = next(self._time_slots_generator)
+
+            new_time_tables: set[TimeTable] = set()
             for time_table in self._unfinished_time_tables:
                 if any(time_table.contains(workshop) for workshop in new_time_slot.workshops):
                     new_time_tables.add(time_table)
@@ -113,21 +118,26 @@ class OptimalTimeTableFinder:
                         addable_time_slots=frozenset(time_table.addable_time_slots | {new_time_slot}),
                         time_slots_count_target=time_table.time_slots_count_target
                     ))
+            self._unfinished_time_tables = new_time_tables
 
     def _yield_new_unbeatable_time_slots(self) -> Generator[TimeTable]:
-        undiscovered_score_upper_bound = max(
-            time_table.score_upper_bound
-            for time_table in self._unfinished_time_tables
-        )
+        if len(self._unfinished_time_tables) == 0:
+            undiscovered_score_upper_bound = 0
+        else:
+            undiscovered_score_upper_bound = max(
+                time_table.score_upper_bound
+                for time_table in self._unfinished_time_tables
+            )
         for time_table in sorted(self._finished_time_tables, key=lambda time_table: time_table.score, reverse=True):
-            if time_table.score >= undiscovered_score_upper_bound:
-                self._finished_time_tables.remove(time_table)
-                self.unbeatable_time_tables.append(time_table)
-                yield time_table
-            else:
+            if time_table.score < undiscovered_score_upper_bound:
                 break
+            self._finished_time_tables.remove(time_table)
+            self.unbeatable_time_tables.append(time_table)
+            yield time_table
     
     def _pop_most_promising_time_table(self) -> TimeTable:
+        if not self._unfinished_time_tables:
+            raise ValueError("No unfinished time table to pop.")
         most_promising_time_table = max(
             self._unfinished_time_tables,
             key=lambda time_table: time_table.score_upper_bound
