@@ -1,4 +1,3 @@
-from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -6,11 +5,7 @@ from types import MappingProxyType
 frozendict = MappingProxyType
 
 
-# Only allow bigger workshops in same slot
-# Make clean rework
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True)
 class Workshop:
     index: int
     name: str
@@ -18,29 +13,13 @@ class Workshop:
     @property
     def score(self) -> int:
         return len(self.participants)
-    
     def __str__(self) -> str:
-        return f"{self.name} (Score {self.score}): {", ".join(self.participants)}"
+        return f"{self.name} (score {self.score}): {", ".join(sorted(self.participants, key=lambda p: int(p)))}"
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True)
 class TimeSlot:
     workshops: frozenset[Workshop]
-    addable_workshops: frozenset[Workshop]
-    workshops_count_target: int
-
-    @property
-    def missing_workshops_count(self) -> int:
-        return self.workshops_count_target - len(self.workshops)
-    @property
-    def is_full(self) -> bool:
-        if len(self.workshops) > self.workshops_count_target:
-            raise Exception(
-                f"This time slot has more workshops than it is allowed to have: " +
-                f"{len(self.workshops)} > {self.workshops_count_target}\n" +
-                f"Workshops: {self.workshops}"
-            )
-        return self.missing_workshops_count == 0
 
     @property
     def participants(self) -> frozendict[str, int]:
@@ -78,123 +57,21 @@ class TimeSlot:
             )
         return score
 
-    @property
-    def score_upper_bound(self) -> int:
-        best_completion = sorted(
-            self.addable_workshops,
-            key=lambda workshop: workshop.score,
-            reverse=True
-        )[:self.missing_workshops_count]
-        return self.score + sum(workshop.score for workshop in best_completion)
-    @property
-    def expandable(self) -> bool:
-        return not(self.is_full) and len(self.addable_workshops) > 0
-    @property
-    def expansions(self) -> frozenset[TimeSlot]:
-        # todo: check again
-
-        if not self.expandable:
-            raise Exception("Check Expandability with .expandable before expansion.")
-        expanding_workshops = sorted(
-            self.addable_workshops,
-            key=lambda workshop: workshop.score,
-            reverse=True
-        )
-        new_time_slots = {TimeSlot(
-            workshops=self.workshops,
-            addable_workshops=frozenset(),
-            workshops_count_target=self.workshops_count_target
-        )}
-
-        for index, expanding_workshop in enumerate(self.addable_workshops):
-            new_time_slots.add(TimeSlot(
-                workshops=frozenset(self.workshops | {expanding_workshop}),
-                addable_workshops=frozenset(expanding_workshops[index + 1:]),
-                workshops_count_target=self.workshops_count_target
-            ))
-        return frozenset(new_time_slots)
-
-    def contains(self, workshop: Workshop) -> bool:
-        return workshop in self.workshops
-
     def __str__(self) -> str:
         output = f"Score {self.score}: "
         output += ", ".join(
-            f"[{workshop}]"
+            f"[{", ".join(sorted(workshop.participants, key=lambda p: int(p)))}]"
             for workshop in sorted(self.workshops, key=lambda w: w.score, reverse=True)
         )
         return output
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True)
 class TimeTable:
     time_slots: frozenset[TimeSlot]
-    addable_time_slots: frozenset[TimeSlot]
-    time_slots_count_target: int
-
-    @property
-    def missing_time_slots_count(self) -> int:
-        return self.time_slots_count_target - len(self.time_slots)
-    @property
-    def is_full(self) -> bool:
-        if len(self.time_slots) > self.time_slots_count_target:
-            raise Exception(
-                f"This time slot has more workshops than it is allowed to have: " +
-                f"{len(self.time_slots)} > {self.time_slots_count_target}\n" +
-                f"Workshops: {self.time_slots}"
-            )
-        return self.missing_time_slots_count == 0
-
-    @property
-    def needs_time_slots(self) -> bool:
-        return self.needs_time_slots_to_estimate_score or self.needs_time_slots_to_expand
-    @property
-    def needs_time_slots_to_expand(self) -> bool:
-        return not(self.is_full) and len(self.addable_time_slots) == 0
-    @property
-    def needs_time_slots_to_estimate_score(self) -> bool:
-        return len(self.addable_time_slots) - self.missing_time_slots_count < 0
-
     @property
     def score(self) -> int:
         return sum(time_slot.score for time_slot in self.time_slots)
-    @property
-    def score_upper_bound(self) -> int:
-        if self.needs_time_slots_to_estimate_score:
-            raise Exception("Add addable time slots before estimating the score.")
-        best_completion = sorted(
-            self.addable_time_slots,
-            key=lambda time_slot: time_slot.score,
-            reverse=True
-        )[:self.missing_time_slots_count]
-        return self.score + sum(time_slot.score for time_slot in best_completion)
-    @property
-    def expandable(self) -> bool:
-        return not(self.is_full) and len(self.addable_time_slots) > 0
-    @property
-    def expansions(self) -> frozenset[TimeTable]:
-        if not self.expandable:
-            raise Exception("Check Expandability with .expandable before expansion.")
-        expanding_time_slots = sorted(
-            self.addable_time_slots,
-            key=lambda time_slot: time_slot.score
-        )
-        new_time_tables = {TimeTable(
-            time_slots=self.time_slots,
-            addable_time_slots=frozenset(),
-            time_slots_count_target=self.time_slots_count_target
-        )}
-        while len(expanding_time_slots) > 0:
-            expanding_time_slot = expanding_time_slots.pop()
-            new_time_tables.add(TimeTable(
-                time_slots=frozenset(self.time_slots | {expanding_time_slot}),
-                addable_time_slots=frozenset(expanding_time_slots),
-                time_slots_count_target=self.time_slots_count_target
-            ))
-        return frozenset(new_time_tables)
-
-    def contains(self, workshop: Workshop) -> bool:
-        return any(time_slot.contains(workshop) for time_slot in self.time_slots)
 
     def __str__(self) -> str:
         output = f"Time table with score {self.score}:"

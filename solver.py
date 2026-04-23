@@ -2,145 +2,156 @@ from collections.abc import Generator, Iterable
 
 from data_structures import TimeSlot, TimeTable, Workshop
 
-
-class OptimalTimeSlotsFinder:
-    unbeatable_time_slots: list[TimeSlot]
-    _unfinished_time_slots: set[TimeSlot]
+class OptimalTimeSlotFinder:
+    _workshops_per_time_slot_max: int
+    _unfinished_time_slots: set[frozenset[Workshop]]
     _finished_time_slots: set[TimeSlot]
 
-    def __init__(self, workshops: Iterable[Workshop], workshops_per_slot: int):
-        self.unbeatable_time_slots = list()
-        self._unfinished_time_slots = set()
-        self._finished_time_slots = set()
-        self._unfinished_time_slots.add(TimeSlot(
-            workshops=frozenset(),
-            addable_workshops=frozenset(workshops),
-            workshops_count_target=workshops_per_slot
-        ))
+    def __init__(self):
+        pass
 
-    def yield_best_time_slots(self) -> Generator[TimeSlot]:
-        self._finished_time_slots |= set(self.unbeatable_time_slots)
-        self.unbeatable_time_slots = list()
-        while len(self._unfinished_time_slots) > 0:
-            yield from self._yield_new_unbeatable_time_slots()
-            most_promising_time_slot = self._pop_most_promising_time_slot()
-            if most_promising_time_slot.expandable:
-                self._unfinished_time_slots.update(most_promising_time_slot.expansions)
-            else:
-                self._finished_time_slots.add(most_promising_time_slot)
-
-    def _yield_new_unbeatable_time_slots(self) -> Generator[TimeSlot]:
-        if len(self._unfinished_time_slots) == 0:
-            undiscovered_score_upper_bound = 0
-        else:
-            undiscovered_score_upper_bound = max(
-                time_slot.score_upper_bound
-                for time_slot in self._unfinished_time_slots
-            )
-        for time_slot in sorted(self._finished_time_slots, key=lambda time_slot: time_slot.score, reverse=True):
-            if time_slot.score < undiscovered_score_upper_bound:
-                break
-            self._finished_time_slots.remove(time_slot)
-            self.unbeatable_time_slots.append(time_slot)
-            yield time_slot
-
-    def _pop_most_promising_time_slot(self) -> TimeSlot:
-        if not self._unfinished_time_slots:
-            raise ValueError("No unfinished time slot to pop.")
-        most_promising_time_slot = max(
-            self._unfinished_time_slots,
-            key=lambda time_slot: time_slot.score_upper_bound
-        )
-        self._unfinished_time_slots.remove(most_promising_time_slot)
-        return most_promising_time_slot
-
-    def _add_time_slots(self, time_slots: Iterable[TimeSlot]):
-        for time_slot in time_slots:
-            self._add_time_slot(time_slot)
-    
-    def _add_time_slot(self, time_slot: TimeSlot):
-        if time_slot.expandable:
-            self._unfinished_time_slots.add(time_slot)
-        else:
-            self._finished_time_slots.add(time_slot)
-
-
-# TimeTableFinder must generate time_slots till it can not be better.
-
-class OptimalTimeTableFinder:
-    unbeatable_time_tables: list[TimeTable]
-    _unfinished_time_tables: set[TimeTable]
-    _finished_time_tables: set[TimeTable]
-    _time_slots_generator: Generator[TimeSlot]  # Assumed to be infinite
-
-    def __init__(
+    def yield_best_time_slot(
             self,
             workshops: Iterable[Workshop],
-            time_slots_per_time_table: int,
-            workshops_per_slot: int
-        ):
-        self.unbeatable_time_tables = list()
-        self._unfinished_time_tables = set()
-        self._finished_time_tables = set()
-        self._unfinished_time_tables.add(TimeTable(
-            time_slots=frozenset(),
-            addable_time_slots=frozenset(),
-            time_slots_count_target=time_slots_per_time_table
-        ))
-        self._time_slots_generator = OptimalTimeSlotsFinder(
-                workshops=workshops,
-                workshops_per_slot=workshops_per_slot
-            ).yield_best_time_slots()
+            workshops_per_time_slot_max: int
+        ) -> Generator[TimeSlot]:
+        if workshops_per_time_slot_max < 1:
+            yield TimeSlot(workshops=frozenset())
+            return
+        self._unfinished_time_slots = {frozenset()}
+        self._finished_time_slots = set()
+        self._workshops_per_time_slot_max = workshops_per_time_slot_max
     
-    def yield_best_time_table(self) -> Generator[TimeTable]:
-        self._finished_time_tables |= set(self.unbeatable_time_tables)
-        self.unbeatable_time_tables = list()
-        while len(self._unfinished_time_tables) > 0:
-            self._add_time_slots_if_needed()
-            yield from self._yield_new_unbeatable_time_slots()
-            most_promising_time_table = self._pop_most_promising_time_table()
-            if most_promising_time_table.expandable:
-                self._unfinished_time_tables.update(most_promising_time_table.expansions)
-            else:
-                self._finished_time_tables.add(most_promising_time_table)
-
-    def _add_time_slots_if_needed(self):
-        while any(time_table.needs_time_slots for time_table in self._unfinished_time_tables):
-            new_time_slot = next(self._time_slots_generator)
-
-            new_time_tables: set[TimeTable] = set()
-            for time_table in self._unfinished_time_tables:
-                if any(time_table.contains(workshop) for workshop in new_time_slot.workshops):
-                    new_time_tables.add(time_table)
-                else:
-                    new_time_tables.add(TimeTable(
-                        time_slots=time_table.time_slots,
-                        addable_time_slots=frozenset(time_table.addable_time_slots | {new_time_slot}),
-                        time_slots_count_target=time_table.time_slots_count_target
-                    ))
-            self._unfinished_time_tables = new_time_tables
-
-    def _yield_new_unbeatable_time_slots(self) -> Generator[TimeTable]:
-        if len(self._unfinished_time_tables) == 0:
-            undiscovered_score_upper_bound = 0
-        else:
-            undiscovered_score_upper_bound = max(
-                time_table.score_upper_bound
-                for time_table in self._unfinished_time_tables
-            )
-        for time_table in sorted(self._finished_time_tables, key=lambda time_table: time_table.score, reverse=True):
-            if time_table.score < undiscovered_score_upper_bound:
-                break
-            self._finished_time_tables.remove(time_table)
-            self.unbeatable_time_tables.append(time_table)
-            yield time_table
+        for workshop in sorted(workshops, key=lambda w: w.score, reverse=True):
+            self._add_workshop_to_time_slots(workshop)
+            yieldable_score_lower_bound = self._get_future_scores_upper_bound(workshop.score)
+            yield from self._yield_yieldable_time_slots(yieldable_score_lower_bound)
     
-    def _pop_most_promising_time_table(self) -> TimeTable:
-        if not self._unfinished_time_tables:
-            raise ValueError("No unfinished time table to pop.")
-        most_promising_time_table = max(
-            self._unfinished_time_tables,
-            key=lambda time_table: time_table.score_upper_bound
+        self._finished_time_slots.update(
+            TimeSlot(workshops=unfinished_time_slot)
+            for unfinished_time_slot in self._unfinished_time_slots
         )
-        self._unfinished_time_tables.remove(most_promising_time_table)
-        return most_promising_time_table
+        yield from self._yield_yieldable_time_slots(0)
+    
+    def _add_workshop_to_time_slots(self, workshop: Workshop):
+        for unfinished_time_slot in self._unfinished_time_slots.copy():
+            new_time_slot = frozenset(unfinished_time_slot | {workshop})
+            if len(new_time_slot) == self._workshops_per_time_slot_max:
+                self._finished_time_slots.add(TimeSlot(workshops=new_time_slot))
+            else:
+                self._unfinished_time_slots.add(new_time_slot)
+    
+    def _get_future_scores_upper_bound(
+            self,
+            score_of_missing_workshops_upper_bound: int
+        ) -> int:
+        upper_bound_max = 0
+        for unfinished_time_slot in self._unfinished_time_slots:
+            missing_workshops_count = self._workshops_per_time_slot_max - len(unfinished_time_slot)
+            upper_bound = (
+                sum(workshop.score for workshop in unfinished_time_slot) +
+                missing_workshops_count * score_of_missing_workshops_upper_bound
+            )
+            upper_bound_max = max(upper_bound_max, upper_bound)
+        return upper_bound_max
+    
+    def _yield_yieldable_time_slots(
+            self,
+            yieldable_score_lower_bound: int
+        ) -> Generator[TimeSlot]:
+        sorted_finished_time_slots = sorted(
+            self._finished_time_slots,
+            key=lambda time_slot: time_slot.score,
+            reverse=True
+        )
+        for time_slot in sorted_finished_time_slots:
+            if time_slot.score > yieldable_score_lower_bound:
+                yield time_slot
+                self._finished_time_slots.remove(time_slot)
+            else:
+                break
+
+class OptimalTimeTableFinder:
+    _time_slots_per_time_table: int
+    _unfinished_time_tables: set[frozenset[TimeSlot]]
+    _finished_time_tables: set[TimeTable]
+
+    def __init__(self):
+        pass
+
+    def yield_best_time_table(
+            self,
+            workshops: Iterable[Workshop],
+            workshops_per_time_slot_max: int,
+            time_slots_per_time_table: int
+        ) -> Generator[TimeTable]:
+        if time_slots_per_time_table < 1:
+            yield TimeTable(time_slots=frozenset())
+            return
+        self._unfinished_time_tables = {frozenset()}
+        self._finished_time_tables = set()
+        self._time_slots_per_time_table = time_slots_per_time_table
+
+        time_slot_generator = OptimalTimeSlotFinder().yield_best_time_slot(
+            workshops,
+            workshops_per_time_slot_max
+        )
+
+        for time_slot in time_slot_generator:
+            self._add_time_slot_to_time_tables(time_slot)
+            yieldable_score_lower_bound = self._get_future_scores_upper_bound(time_slot.score)
+            yield from self._yield_yieldable_time_tables(yieldable_score_lower_bound)
+        
+        self._finished_time_tables.update(
+            TimeTable(time_slots=unfinished_time_table)
+            for unfinished_time_table in self._unfinished_time_tables
+        )
+        yield from self._yield_yieldable_time_tables(0)
+    
+    def _add_time_slot_to_time_tables(self, time_slot: TimeSlot):
+        for unfinished_time_table in self._unfinished_time_tables.copy():
+            if self.have_overlapping_workshop(unfinished_time_table, time_slot):
+                continue
+            new_time_table = frozenset(unfinished_time_table | {time_slot})
+            if len(new_time_table) == self._time_slots_per_time_table:
+                self._finished_time_tables.add(TimeTable(time_slots=new_time_table))
+            else:
+                self._unfinished_time_tables.add(new_time_table)
+
+    def _get_future_scores_upper_bound(
+            self,
+            score_of_missing_workshops_upper_bound: int
+        ):
+        upper_bound_max = 0
+        for unfinished_time_table in self._unfinished_time_tables:
+            missing_time_slots_count = self._time_slots_per_time_table - len(unfinished_time_table)
+            upper_bound = (
+                sum(time_slot.score for time_slot in unfinished_time_table) +
+                missing_time_slots_count * score_of_missing_workshops_upper_bound
+            )
+            upper_bound_max = max(upper_bound_max, upper_bound)
+        return upper_bound_max
+
+    def _yield_yieldable_time_tables(
+            self,
+            yieldable_score_lower_bound: int
+        ):
+        sorted_finished_time_tables = sorted(
+            self._finished_time_tables,
+            key=lambda time_table: time_table.score,
+            reverse=True
+        )
+        for time_table in sorted_finished_time_tables:
+            if time_table.score > yieldable_score_lower_bound:
+                yield time_table
+                self._finished_time_tables.remove(time_table)
+            else:
+                break
+
+    @staticmethod
+    def have_overlapping_workshop(time_slots: Iterable[TimeSlot], new_time_slot: TimeSlot) -> bool:
+        return any(
+            workshop in new_time_slot.workshops
+            for time_slot in time_slots
+            for workshop in time_slot.workshops
+        )
