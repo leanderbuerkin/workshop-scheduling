@@ -1,16 +1,17 @@
+from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
+from functools import cached_property
 from types import MappingProxyType
 
 frozendict = MappingProxyType
-
 
 @dataclass(frozen=True, kw_only=True)
 class Workshop:
     index: int
     name: str
     participants: frozenset[str]
-    @property
+    @cached_property
     def score(self) -> int:
         return len(self.participants)
     def __str__(self) -> str:
@@ -21,17 +22,17 @@ class Workshop:
 class TimeSlot:
     workshops: frozenset[Workshop]
 
-    @property
+    @cached_property
     def participants(self) -> frozendict[str, int]:
         return frozendict(Counter(
             participant
             for workshop in self.workshops
             for participant in workshop.participants
         ))
-    @property
+    @cached_property
     def participants_with_exactly_one_option(self) -> frozenset[str]:
         return frozenset(filter(lambda key: self.participants[key] == 1, self.participants.keys()))
-    @property
+    @cached_property
     def score(self) -> int:
         """
         There are the following options:
@@ -57,6 +58,15 @@ class TimeSlot:
             )
         return score
 
+    def is_incompatible(self, workshop: Workshop) -> bool:
+        return workshop in self.workshops
+
+    def get_copy_with_element_added(self, workshop: Workshop) -> TimeSlot:
+        return TimeSlot(workshops=frozenset(self.workshops | {workshop}))
+
+    def __len__(self) -> int:
+        return len(self.workshops)
+
     def __str__(self) -> str:
         output = f"Score {self.score}: "
         output += ", ".join(
@@ -69,9 +79,22 @@ class TimeSlot:
 @dataclass(frozen=True, kw_only=True)
 class TimeTable:
     time_slots: frozenset[TimeSlot]
-    @property
+    @cached_property
     def score(self) -> int:
         return sum(time_slot.score for time_slot in self.time_slots)
+
+    def is_incompatible(self, time_slot: TimeSlot) -> bool:
+        return any(
+            workshop in time_slot.workshops
+            for time_slot in self.time_slots
+            for workshop in time_slot.workshops
+        )
+
+    def get_copy_with_element_added(self, time_slot: TimeSlot) -> TimeTable:
+        return TimeTable(time_slots=frozenset(self.time_slots | {time_slot}))
+
+    def __len__(self) -> int:
+        return len(self.time_slots)
 
     def __str__(self) -> str:
         output = f"Time table with score {self.score}:"
