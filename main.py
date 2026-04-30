@@ -1,7 +1,7 @@
 from random import randint, sample
 
-from data_structures import Workshop
-from optimal_union_finder import OptimalUnionFinder
+from data_structures import TimeSlot, TimeTable, Workshop
+from optimal_union_finder import FindOptimalUnionIterator
 
 # todo: compress into single file, that reads a txt and returns the result as txt
 
@@ -23,18 +23,21 @@ print("Workshops:\n")
 print("\n".join(str(workshop) for workshop in workshops))
 print("\n")
 
-time_slot_finder = OptimalUnionFinder()
-time_table_finder = OptimalUnionFinder()
-
-
-
-
-
+time_slot_finder = FindOptimalUnionIterator[Workshop, TimeSlot](
+    unions_max_length=3,
+    root_union=TimeSlot(workshops=frozenset()),
+    elements_descending_by_score=workshops
+)
+time_table_finder = FindOptimalUnionIterator[TimeSlot, TimeTable](
+    unions_max_length=3,
+    root_union=TimeTable(time_slots=frozenset()),
+    elements_descending_by_score=time_slot_finder
+)
 
 TRUE_INPUT = ("", "yes", "y", "true", "t", "1")
 # FALSE_INPUT = ("no", "n", "false", "f", "quit", "q", "exit", "e", "x", "0")
 
-for solution in solver.yield_best_time_table(workshops, 3, 3):
+for solution in time_table_finder:
     print(solution)
     reply = input("Generate next solution? (answer enter/yes or no): ").lower().strip()
     if reply not in TRUE_INPUT:

@@ -1,118 +1,133 @@
-from __future__ import annotations
-from bisect import insort
+"""
+Optimal Union Finder - Find the best unions of elements using branch-and-bound algorithm.
+
+This module implements a generator-based algorithm to find unions (combinations) of elements
+that maximize a score function, where each union has a maximum size constraint.
+
+It differs from the branch-and-bound algorithm in that sense
+that it yields mutliple solution ordered by their score - the most optimal first.
+This is done to give the user some options to choose from.
+"""
 from collections import defaultdict
-from collections.abc import Generator, Iterable
-from dataclasses import dataclass, replace
-from functools import cached_property
-from typing import Protocol
+from collections.abc import Iterable, Iterator
+from functools import cached_property, total_ordering
+from typing import Protocol, Self, cast, runtime_checkable
 
-
-@dataclass(frozen=True, kw_only=True)
-class Element(Protocol):
+@total_ordering
+@runtime_checkable
+class ElementProtocol(Protocol):
     @cached_property
     def score(self) -> int:
         ...
+    def __lt__(self, other: object) -> bool:
+        ...
+    def __eq__(self, other: object) -> bool:
+        ...
 
 
-@dataclass(frozen=True, kw_only=True)
-class Union(Protocol):
+@total_ordering
+@runtime_checkable
+class UnionProtocol[Element: ElementProtocol](Protocol):
     @cached_property
     def score(self) -> int:
         ...
-    def is_incompatible(self, element: Element) -> bool:
+    def is_compatible(self, element: Element) -> bool:
         ...
-    def get_copy_with_element_added(self, element: Element) -> Union:
+    def copy_and_expand_copy(self, element_to_expand_with: Element) -> Self:
         ...
     def __len__(self) -> int:
         ...
+    def __lt__(self, other: object) -> bool:
+        ...
+    def __eq__(self, other: object) -> bool:
+        ...
 
 
-@dataclass(frozen=True, kw_only=True)
-class State:
-    unions_max_length: int
-    unions: set[Union]
-    unexpandable_unions: list[Union]
-    unions_with_max_score_per_length: defaultdict[int, int]
-    elements_generator: Generator[Element]
-    future_elements_score_upper_bound: int
-    @property
-    def future_union_scores_upper_bound(self) -> int:
-        return max(
-            self.future_elements_score_upper_bound*(self.unions_max_length - length) + score
-            for length, score in self.unions_with_max_score_per_length.items()
-        )
-
-
-def yield_best_union(
-        elements_descending_by_score: Iterable[Element],
-        root_union: Union,
-        unions_max_length: int
-    ) -> Generator[Union]:
-
-    if unions_max_length < 1 or len(root_union) >= unions_max_length:
-        yield root_union
-        return
+class FindOptimalUnionIterator[Element: ElementProtocol, Union]:
+    """
+    Branch-and-bound generator for optimal unions.
     
-    unions_with_max_score_per_length: defaultdict[int, int] = defaultdict(int)
-    unions_with_max_score_per_length[len(root_union)] = root_union.score
-    
-    state = State(
-        unions_max_length = unions_max_length,
-        unions = {root_union},
-        unexpandable_unions = list(),
-        unions_with_max_score_per_length = unions_with_max_score_per_length,
-        elements_generator=(element for element in elements_descending_by_score),
-        future_elements_score_upper_bound = int('inf')
-    )
+    Uses a best-first search strategy to yield unions in descending order of score.
+    Only yields unions when their score is proven to be at least as good as any
+    undiscovered union (based on the upper bound heuristic).
+    """
+    _unions_max_length: int
+    _elements_generator: Iterator[Element]
+    _unions: set[UnionProtocol[Element]]
+    _unexpandable_unions: set[UnionProtocol[Element]]
+    _unions_with_max_score_per_length: defaultdict[int, int]
+    _future_unions_score_upper_bound: float
 
-    for element in elements_descending_by_score:
-        state = _add_element_to_unions(state, element)
-        state = yield from _yield_yieldable_unions(state)
-    
-    state = replace(
-        state,
-        unexpandable_unions=state.unions,
-        unions=set()
-    )
-    yield from _yield_yieldable_unions(state)
+    def __init__(
+            self,
+            unions_max_length: int,
+            root_union: UnionProtocol[Element],
+            elements_descending_by_score: Iterable[Element]
+        ):
+        """Initialize the union generator.
+        
+        Args:
+            elements_descending_by_score: Iterable of elements sorted by score (high to low).
+            root_union: Initial union to start the search from.
+            unions_max_length: Maximum number of elements allowed in any union.
+        """
+        self._unions_max_length = unions_max_length
+        self._elements_generator = iter(elements_descending_by_score)
+        self._unions = set()
+        self._unexpandable_unions = set()
+        self._unions_with_max_score_per_length = defaultdict(int)
+        self._future_unions_score_upper_bound = float("inf")
+        self._add_union(root_union)
 
-def _add_element_to_unions(state: State, element: Element) -> State:
-    unions = state.unions.copy()
-    unexpandable_unions = state.unexpandable_unions[:]
-    unions_with_max_score_per_length = state.unions_with_max_score_per_length.copy()
+    def __iter__(self) -> Iterator[Union]:
+        return self
 
-    for union in unions:
-        if len(union) >= state.unions_max_length or union.is_incompatible(element):
-            continue
+    def __next__(self) -> Union:
+        """
+        Yield the next best union.
+        
+        Returns:
+            A union which is guaranteed to have a higher score
+            than any future union generated by this instances.
+            
+        Raises:
+            StopIteration: When all unions have been yielded.
+        """
+        for element in self._elements_generator:
+            if yieldable_union := self._try_to_get_yieldable_union():
+                return cast(Union, yieldable_union)
+            for union in sorted(self._unions):
+                if union.is_compatible(element):
+                    self._add_union(union.copy_and_expand_copy(element))
+            if len(self._unions_with_max_score_per_length) > 0:
+                self._future_unions_score_upper_bound = max(
+                    element.score * (self._unions_max_length - length) + score
+                    for length, score in self._unions_with_max_score_per_length.items()
+                )
+        if len(self._unions) > 0:
+            self._unexpandable_unions.update(self._unions)
+            self._unions.clear()
+            self._unions_with_max_score_per_length.clear()
+            self._future_unions_score_upper_bound = 0
+        if yieldable_union := self._try_to_get_yieldable_union():
+            return cast(Union, yieldable_union)
+        raise StopIteration
 
-        new_union = union.get_copy_with_element_added(element)
-        if len(new_union) >= state.unions_max_length:
-            insort(unexpandable_unions, new_union, key=lambda union: union.score)
+    def _add_union(self, new_union: UnionProtocol[Element]):
+        if len(new_union) >= self._unions_max_length:
+            self._unexpandable_unions.add(new_union)
         else:
-            unions.add(new_union)
-            if unions_with_max_score_per_length[len(new_union)] < new_union.score:
-                unions_with_max_score_per_length[len(new_union)] = new_union.score
-    return replace(
-        state,
-        future_elements_score_upper_bound=element.score,
-        unions=unions,
-        unexpandable_unions=unexpandable_unions,
-        unions_with_max_score_per_length=unions_with_max_score_per_length
-    )
+            self._unions.add(new_union)
+            if self._unions_with_max_score_per_length[len(new_union)] < new_union.score:
+                self._unions_with_max_score_per_length[len(new_union)] = new_union.score
 
+    def _try_to_get_yieldable_union(self) -> UnionProtocol[Element] | None:
+        if len(self._unexpandable_unions) == 0:
+            return None
 
-def _yield_yieldable_unions(state: State) -> Generator[Union, None, State]:
-    if len(state.unexpandable_unions) == 0:
-        return state
-
-    unexpandable_unions = state.unexpandable_unions[:]
-
-    print(f"Most promising union (score {unexpandable_unions[-1].score}):")
-    print(unexpandable_unions[-1])
-    print(f"Upper bound of scores of yet undiscovered unions: {state.future_union_scores_upper_bound}")
-
-    while len(unexpandable_unions) == 0:
-        if unexpandable_unions[-1].score < state.future_union_scores_upper_bound:
-            break
-        yield unexpandable_unions.pop()
-    return replace(state, unexpandable_unions=unexpandable_unions)
+        most_promising_union = max(self._unexpandable_unions)
+        print(f"future_unions_score_upper_bound: {self._future_unions_score_upper_bound}")
+        print(f"most_promising_union (score {most_promising_union.score}): {most_promising_union}")
+        if most_promising_union.score >= self._future_unions_score_upper_bound:
+            self._unexpandable_unions.remove(most_promising_union)
+            return most_promising_union

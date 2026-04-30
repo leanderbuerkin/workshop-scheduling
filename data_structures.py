@@ -1,11 +1,13 @@
 from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
-from functools import cached_property
+from functools import cached_property, total_ordering
 from types import MappingProxyType
 
 frozendict = MappingProxyType
 
+
+@total_ordering
 @dataclass(frozen=True, kw_only=True)
 class Workshop:
     index: int
@@ -14,10 +16,20 @@ class Workshop:
     @cached_property
     def score(self) -> int:
         return len(self.participants)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Workshop):
+            raise TypeError
+        return self.score < other.score
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Workshop) and self.score == other.score
+
     def __str__(self) -> str:
         return f"{self.name} (score {self.score}): {", ".join(sorted(self.participants, key=lambda p: int(p)))}"
 
 
+@total_ordering
 @dataclass(frozen=True, kw_only=True)
 class TimeSlot:
     workshops: frozenset[Workshop]
@@ -29,9 +41,11 @@ class TimeSlot:
             for workshop in self.workshops
             for participant in workshop.participants
         ))
+
     @cached_property
     def participants_with_exactly_one_option(self) -> frozenset[str]:
-        return frozenset(filter(lambda key: self.participants[key] == 1, self.participants.keys()))
+        return frozenset(p for p, options_count in self.participants.items() if options_count == 1)
+
     @cached_property
     def score(self) -> int:
         """
@@ -58,14 +72,22 @@ class TimeSlot:
             )
         return score
 
-    def is_incompatible(self, workshop: Workshop) -> bool:
-        return workshop in self.workshops
+    def is_compatible(self, element: Workshop) -> bool:
+        return element in self.workshops
 
-    def get_copy_with_element_added(self, workshop: Workshop) -> TimeSlot:
-        return TimeSlot(workshops=frozenset(self.workshops | {workshop}))
+    def copy_and_expand_copy(self, element_to_expand_with: Workshop) -> TimeSlot:
+        return TimeSlot(workshops=frozenset(self.workshops | {element_to_expand_with}))
 
     def __len__(self) -> int:
         return len(self.workshops)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Workshop):
+            raise TypeError
+        return self.score < other.score
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, TimeSlot) and self.score == other.score
 
     def __str__(self) -> str:
         output = f"Score {self.score}: "
@@ -76,6 +98,7 @@ class TimeSlot:
         return output
 
 
+@total_ordering
 @dataclass(frozen=True, kw_only=True)
 class TimeTable:
     time_slots: frozenset[TimeSlot]
@@ -83,18 +106,26 @@ class TimeTable:
     def score(self) -> int:
         return sum(time_slot.score for time_slot in self.time_slots)
 
-    def is_incompatible(self, time_slot: TimeSlot) -> bool:
-        return any(
-            workshop in time_slot.workshops
+    def is_compatible(self, element: TimeSlot) -> bool:
+       return all(
+            not workshop in element.workshops
             for time_slot in self.time_slots
             for workshop in time_slot.workshops
         )
 
-    def get_copy_with_element_added(self, time_slot: TimeSlot) -> TimeTable:
-        return TimeTable(time_slots=frozenset(self.time_slots | {time_slot}))
+    def copy_and_expand_copy(self, element_to_expand_with: TimeSlot) -> TimeTable:
+        return TimeTable(time_slots=frozenset(self.time_slots | {element_to_expand_with}))
 
     def __len__(self) -> int:
         return len(self.time_slots)
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, TimeTable):
+            raise TypeError
+        return self.score < other.score
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, TimeTable) and self.score == other.score
 
     def __str__(self) -> str:
         output = f"Time table with score {self.score}:"
