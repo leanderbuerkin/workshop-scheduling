@@ -3,6 +3,11 @@ from collections.abc import Callable, Generator, Iterator
 from dataclasses import dataclass
 from itertools import islice
 
+
+# todo: Combine function
+# todo: score functions
+# todo: Workshops scores/categories from People instead of in/out
+
 @dataclass(frozen=True, order=True, kw_only=True)
 class ScoredHashable:
     score: int
@@ -11,7 +16,7 @@ class ScoredHashable:
 @dataclass(frozen=True, order=True, kw_only=True)
 class ScoredHashableWithLength(ScoredHashable):
     def __len__(self) -> int:
-        raise Exception("Not implemented!")
+        raise NotImplementedError("__len__() must be implemented!")
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -50,11 +55,6 @@ class TimeTable(ScoredHashableWithLength):
         return output + "\n"
 
 
-
-# todo: score upper bound should be a post init
-
-
-
 def yield_best_unions[Element: ScoredHashable, Union: ScoredHashableWithLength](
         elements_high_to_low: Iterator[Element],
         elements_per_union: int,
@@ -62,58 +62,58 @@ def yield_best_unions[Element: ScoredHashable, Union: ScoredHashableWithLength](
         combine: Callable[[Union, Element], Union | None]
     ) -> Generator[Union]:
 
-
     @dataclass(order=True, kw_only=True)
-    class UnfinishedUnion:
-        score_upper_bound: int
+    class ExpandableUnion:
+        score_upper_bound: int # first for automatic ordering
         union: Union
         addable_element_index: int
+
         def __len__(self) -> int:
             return len(self.union)
 
 
     elements: list[Element] = list()
-    unfinished_unions: list[UnfinishedUnion] = list()
+    expandable_unions: list[ExpandableUnion] = list()
     completed_unions: list[Union] = list()
 
 
-    def can_be_expanded(union: UnfinishedUnion) -> bool:
-        if len(elements) < union.addable_element_index:
-            raise Exception(
+    def get_unfinished_union(union: Union, addable_element_index: int) -> ExpandableUnion:
+        missing_elements_count = max(0, elements_per_union - len(union))
+        best_completion = elements[addable_element_index : addable_element_index + missing_elements_count]
+
+        return ExpandableUnion(
+            score_upper_bound=union.score + sum(element.score for element in best_completion),
+            union=union,
+            addable_element_index=addable_element_index
+        )
+
+
+    def can_be_expanded(addable_element_index: int) -> bool:
+        if len(elements) < addable_element_index:
+            raise ValueError(
                 f"This union maybe got an element added that was not in elements" +
-                f" ({len(elements)} < {union.addable_element_index}):\n{union}"
+                f" {len(elements)} < {addable_element_index}"
             )
-
-        if len(elements) == union.addable_element_index:
-            elements.extend(islice(elements_high_to_low, 1))
-
-        return len(elements) > union.addable_element_index
+        return len(elements) > addable_element_index
 
 
-    def add_union(union: UnfinishedUnion):
+    def add_union(union: Union, addable_element_index: int):
         if len(union) > elements_per_union:
             raise Exception(f"Union exceeded target length of {elements_per_union}: {union}")
 
-        if len(union) < elements_per_union and can_be_expanded(union):
-            insort(unfinished_unions, union)
+        missing_elements_count = max(1, elements_per_union - len(union))  # at least one is needed in can_be_expanded()
+        elements.extend(islice(elements_high_to_low, addable_element_index + missing_elements_count - len(elements)))
+
+        if len(union) < elements_per_union and can_be_expanded(addable_element_index):
+            insort(expandable_unions, get_unfinished_union(union, addable_element_index))
         else:
-            insort(completed_unions, union.union)
+            insort(completed_unions, union)
 
 
-    def get_score_upper_bound(union: Union, addable_element_index: int) -> int:
-        missing_elements_count = max(0, elements_per_union - len(union))
-        best_completion = elements[addable_element_index : addable_element_index + missing_elements_count]
-        return union.score + sum(element.score for element in best_completion)
+    add_union(root_union, 0)
 
-
-    add_union(UnfinishedUnion(
-        score_upper_bound=get_score_upper_bound(root_union, 0),
-        union=root_union,
-        addable_element_index=0
-    ))
-
-    while len(unfinished_unions) > 0:
-        most_promising_union = unfinished_unions.pop()
+    while len(expandable_unions) > 0:
+        most_promising_union = expandable_unions.pop()
 
         yieldable_score_min = most_promising_union.score_upper_bound
         while len(completed_unions) > 0 and completed_unions[-1].score >= yieldable_score_min:
@@ -121,16 +121,8 @@ def yield_best_unions[Element: ScoredHashable, Union: ScoredHashableWithLength](
 
         addable_element = elements[most_promising_union.addable_element_index]
         if new_union := combine(most_promising_union.union, addable_element):
-            add_union(UnfinishedUnion(
-                score_upper_bound=most_promising_union.score_upper_bound,
-                union=new_union,
-                addable_element_index=most_promising_union.addable_element_index + 1
-            ))
-        add_union(UnfinishedUnion(
-            score_upper_bound=get_score_upper_bound(most_promising_union.union, most_promising_union.addable_element_index + 1),
-            union=most_promising_union.union,
-            addable_element_index=most_promising_union.addable_element_index + 1
-        ))
+            add_union(new_union, most_promising_union.addable_element_index + 1)
+        add_union(most_promising_union.union, most_promising_union.addable_element_index + 1)
 
     while len(completed_unions) > 0:
         yield completed_unions.pop()
