@@ -21,7 +21,7 @@ sorted_time_tables = yield_best_unions(
     combine=combine_to_time_table
 )
 
-TRUE_INPUT = ("", "yes", "y", "true", "t", "1")
+TRUE_INPUT = ("", "yes", "y", "true", "enter", "t", "1")
 # FALSE_INPUT = ("no", "n", "false", "f", "quit", "q", "exit", "e", "x", "0")
 
 for solution in sorted_time_tables:
