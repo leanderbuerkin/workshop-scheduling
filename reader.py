@@ -1,29 +1,28 @@
-from bisect import insort
+from collections import defaultdict
 from pathlib import Path
 
-from data_structures import Workshop
+from data_structures import Preferences, frozendict
 
-
-def read_workshops(path: Path) -> list[Workshop]:
-    workshops: list[Workshop] = []
+def read_workshops(path: Path) -> Preferences:
+    participants_as_set: set[str] = set()
+    workshops: dict[str, defaultdict[str, int]] = dict()
     workshop_name: str | None = None
 
     with open(path, "r") as file:
         for line in (raw_line.strip() for raw_line in file.readlines()):
             if line.startswith("## "):
                 workshop_name = line[len("## "):].strip()
-            elif line != "" and workshop_name:
-                participants = frozenset(participant.strip() for participant in line.split(","))
-                insort(
-                    workshops,
-                    Workshop(
-                        score=len(participants),
-                        index=len(workshops),
-                        name=workshop_name,
-                        participants=participants
-                    ),
-                    key=lambda workshop: workshop.score
-                )
-                workshop_name = None
+                workshops[workshop_name] = defaultdict(int)
+                continue
+            if line == "" or workshop_name is None:
+                continue
 
-    return workshops
+            name, score = line.split(": ", 1)
+            workshops[workshop_name][name] = int(score)
+            participants_as_set.add(name)
+
+    participants = sorted(participants_as_set)
+    return frozendict({
+        workshop: tuple(preferences[participant] for participant in participants)
+        for workshop, preferences in workshops.items()
+    })

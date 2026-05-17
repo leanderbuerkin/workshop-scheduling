@@ -1,74 +1,67 @@
+from collections.abc import Generator, Iterable
+from heapq import heappop, heappush
+from itertools import combinations
 
-from bisect import insort
-from collections.abc import Callable, Generator
-from itertools import islice
+from data_structures import Preferences, ScoredTimeSlot, ScoredTimeTable, TimeTable, Workshop
+def yield_time_tables(
+        preferences: Preferences,
+        workshops_per_time_slot: int,
+        time_slots_per_time_table: int
+    ) -> Generator[ScoredTimeTable]:
 
-from data_structures import Scored, SizedScored
+    def get_score(workshops: Iterable[Workshop]) -> int:
+        total_score = 0
+        participants_scores: tuple[int, ...]
+        for participants_scores in zip(*(preferences[workshop] for workshop in workshops)):
+            score = 0
+            for participants_score in participants_scores:
+                if score == 0:
+                    score = participants_score
+                elif participants_score != 0:
+                    score = 0
+                    break
+            total_score += score
+        return total_score
 
-def yield_best_unions[Element: Scored, Union: SizedScored](
-        elements_high_to_low: Generator[Element],
-        elements_per_union: int,
-        root_union: Union,
-        combine: Callable[[Union, Element], Union | None]
-    ) -> Generator[Union]:
+    time_slots: list[ScoredTimeSlot] = sorted(
+        (get_score(combination), combination)
+        for workshops_count in range(workshops_per_time_slot + 1)
+        for combination in combinations(preferences.keys(), workshops_count)
+    )
 
-    elements: list[Element] = list()
-    expandable_unions: list[Union] = list()
-    score_upper_bounds: dict[Union, int] = dict()
-    addable_element_indizes: dict[Union, int] = dict()
-    completed_unions: list[Union] = list()
+    unfinished_time_tables: set[TimeTable] = {tuple()}
+    new_time_tables: set[TimeTable] = set()
+    finished_time_tables: list[ScoredTimeTable] = list()
+    best_unfinished_time_table_score = sum(score for score, _ in time_slots[:time_slots_per_time_table - 1])
+    for new_time_slot in time_slots:
+        future_time_table_scores_upper_bound = best_unfinished_time_table_score + new_time_slot[0]
+        while len(finished_time_tables) > 0 and finished_time_tables[0][0] > future_time_table_scores_upper_bound:
+            yield heappop(finished_time_tables)
 
-    def get_score_upper_bound(union: Union) -> int:
-        index = addable_element_indizes[union]
-        missing_elements_count = max(0, elements_per_union - len(union))
-        elements.extend(islice(elements_high_to_low, max(0, index + missing_elements_count - len(elements))))
-        best_completion = elements[index : index + missing_elements_count]
-        return union.score + sum(element.score for element in best_completion)
+        for unfinished_time_table in unfinished_time_tables:
+            if any(
+                workshop in new_time_slot[1]
+                for time_slot in unfinished_time_table
+                for workshop in time_slot[1]
+                ):
+                continue
+            
+            new_time_table = unfinished_time_table + (new_time_slot,)
+            
+            if len(new_time_table) == time_slots_per_time_table:
+                score = sum(time_slot[0] for time_slot in new_time_table)
+                # minus score cause its a min-heap
+                heappush(finished_time_tables, (-score, new_time_table))
+            elif len(new_time_table) < time_slots_per_time_table:
+                new_time_tables.add(new_time_table)
 
-    def can_be_expanded(union: Union) -> bool:
-        index = addable_element_indizes[union]
-        if len(elements) < index:
-            raise ValueError(
-                f"This union maybe got an element added that was not in elements" +
-                f" ({len(elements)} < {index}):\n{union}"
-            )
-        elements.extend(islice(elements_high_to_low, max(0, index + 1 - len(elements))))
-        return len(elements) > index
+        unfinished_time_tables.update(new_time_tables)
+        new_time_tables.clear()
 
-    def add_union(union: Union):
-        if len(union) > elements_per_union:
-            raise Exception(f"Union exceeded target length of {elements_per_union}: {union}")
+    for time_table in unfinished_time_tables:
+        score = sum(time_slot[0] for time_slot in time_table)
+        # minus score cause its a min-heap
+        heappush(finished_time_tables, (-score, time_table))
 
-        if union not in addable_element_indizes.keys():
-            addable_element_indizes[union] = 0
-        if len(union) < elements_per_union and can_be_expanded(union):
-            score_upper_bounds[union] = get_score_upper_bound(union)
-            insort(
-                expandable_unions, union,
-                key=lambda union: (score_upper_bounds[union], addable_element_indizes[union])
-            )
-        else:
-            del addable_element_indizes[union]
-            if union in score_upper_bounds:
-                del score_upper_bounds[union]
-            insort(completed_unions, union, key=lambda union: (union.score, -len(union)))
-
-
-    add_union(root_union)
-    while len(expandable_unions) > 0:
-        most_promising_union = expandable_unions.pop()
-
-        yieldable_score_min = score_upper_bounds[most_promising_union]
-        while len(completed_unions) > 0 and completed_unions[-1].score >= yieldable_score_min:
-            yield completed_unions.pop()
-
-        index = addable_element_indizes[most_promising_union]
-        addable_element_indizes[most_promising_union] += 1
-        new_element = elements[index]
-        if new_union := combine(most_promising_union, new_element):
-            addable_element_indizes[new_union] = addable_element_indizes[most_promising_union]
-            add_union(new_union)
-        add_union(most_promising_union)
-
-    while len(completed_unions) > 0:
-        yield completed_unions.pop()
+    while len(finished_time_tables) > 0:
+        yield heappop(finished_time_tables)
