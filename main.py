@@ -2,12 +2,9 @@ from pathlib import Path
 from reader import read_workshops
 from solver import yield_time_tables
 
-# todo: Use the actually biggest score (maybe index 0 and 1 have overlapp)
+preferences = read_workshops(Path("long_example.md"))
 
-
-preferences = read_workshops(Path("example.md"))
-
-sorted_time_tables = yield_time_tables(preferences, 3, 3)
+sorted_time_tables = yield_time_tables(preferences, 3, 20)
 
 TRUE_INPUT = ("", "yes", "y", "true", "enter", "t", "1")
 # FALSE_INPUT = ("no", "n", "false", "f", "quit", "q", "exit", "e", "x", "0")
