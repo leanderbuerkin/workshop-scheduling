@@ -1,10 +1,11 @@
 from pathlib import Path
-from reader import read_workshops
+
+from pandas import read_csv
 from solver import yield_time_tables
 
-preferences = read_workshops(Path("long_example.md"))
+preferences = read_csv(Path("example.csv")).fillna(0).astype(int)
 
-sorted_time_tables = yield_time_tables(preferences, 3, 20)
+sorted_time_tables = yield_time_tables(preferences, 20)
 
 TRUE_INPUT = ("", "yes", "y", "true", "enter", "t", "1")
 # FALSE_INPUT = ("no", "n", "false", "f", "quit", "q", "exit", "e", "x", "0")
