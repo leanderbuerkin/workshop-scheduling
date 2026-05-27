@@ -1,123 +1,113 @@
 from bisect import insort
-from collections.abc import Generator, Iterable
+from collections.abc import Generator, Sequence
 from functools import partial
-from itertools import combinations
-from typing import TypeAlias
+from numpy import ndarray
 
-from pandas import DataFrame
-
-Workshop: TypeAlias = str
-Score: TypeAlias = int
-ScoreUpperBound: TypeAlias = int
-Index = int
-
-TimeSlot: TypeAlias = tuple[Score, tuple[Workshop, ...]]
-UnfinishedTimeSlot: TypeAlias = tuple[ScoreUpperBound, Index, TimeSlot]
-TimeTable: TypeAlias = tuple[Score, tuple[TimeSlot, ...]]
-UnfinishedTimeTable: TypeAlias = tuple[ScoreUpperBound, Index, TimeTable]
-
-# todo: Generate time_slots in a similar fashion:
-# Remove all indizes that provide no benefit for themself or the given workshop
-# Branch all of them and add self to 
-# Iterate to the workshop that actually can be added
-# todo: Use Numpy or rust
+from data_structures import TimeSlot, TimeTable, UnfinishedTimeTable, WorkshopIndex
 
 def yield_time_tables(
-        preferences: DataFrame,
+        time_slots_in_descending_order: list[TimeSlot],
         time_slots_per_time_table: int
-    ) -> Generator[tuple[int, tuple[tuple[int, tuple[str, ...]], ...]]]:
-    time_slots = _get_time_slots(preferences)
+    ) -> Generator[TimeTable]:
     unfinished_time_tables: list[UnfinishedTimeTable] = list()
     finished_time_tables: list[TimeTable] = list()
 
     add_time_table = partial(
         _add_time_table,
         time_slots_per_time_table,
-        time_slots,
+        time_slots_in_descending_order,
         finished_time_tables,
         unfinished_time_tables
     )
 
-    add_time_table(len(time_slots) - 1, (0, tuple()))
+    add_time_table(0, TimeTable(score=0, time_slots=tuple()))
 
     while len(unfinished_time_tables) > 0:
-        while len(finished_time_tables) > 0 and finished_time_tables[-1][0] >= unfinished_time_tables[-1][0]:
+        print(len(unfinished_time_tables))
+        if len(finished_time_tables) > 0:
+            print(f"Score: {finished_time_tables[-1].score}")
+            print(f"Upper Bound: {unfinished_time_tables[-1].score_upper_bound}")
+        while len(finished_time_tables) > 0 and finished_time_tables[-1].score >= unfinished_time_tables[-1].score_upper_bound:
             yield finished_time_tables.pop()
-
+        
         best_time_table = unfinished_time_tables.pop()
 
-        new_time_slot_index = best_time_table[1]
-        new_time_slot = time_slots[new_time_slot_index]
+        new_time_slot_index = best_time_table.next_time_slot_index
+        new_time_slot = time_slots_in_descending_order[new_time_slot_index]
 
-        new_time_slot_index = add_time_table(new_time_slot_index - 1, best_time_table[2])
-        new_time_table = (best_time_table[2][0] + new_time_slot[0], best_time_table[2][1] + (new_time_slot,))
+        new_time_slot_index = add_time_table(new_time_slot_index + 1, best_time_table.time_table)
+        new_time_table = TimeTable(
+            score=best_time_table.score + new_time_slot.score,
+            time_slots=best_time_table.time_slots + (new_time_slot,)
+        )
         add_time_table(new_time_slot_index, new_time_table)
-
+    
     while len(finished_time_tables) > 0:
         yield finished_time_tables.pop()
 
-def _get_time_slots(
-        preferences: DataFrame,
-        workshops_per_time_slot: int=3
-        ) -> list[TimeSlot]:
-    get_score = partial(_get_score, preferences)
-    return sorted(
-        (get_score(combination), combination)
-        for workshops_count in range(1, workshops_per_time_slot + 1)
-        for combination in combinations(preferences.columns, workshops_count)
-    )
-
-def get_time_slots(
-        preferences: DataFrame
-    ) -> list[TimeSlot]:
-    get_score = partial(_get_score, preferences)
-
-    time_slots: set[TimeSlot] = {(get_score((workshop,)), (workshop,)) for workshop in preferences.columns}
-    old_length = 0
-    while len(time_slots) > old_length:
-        print(old_length)
-        old_length = len(time_slots)
-        time_slots.update(
-            (score, time_slot1[1] + time_slot2[1])
-            for time_slot1, time_slot2 in combinations(time_slots, 2)
-            if (score := get_score(time_slot1[1] + time_slot2[1])) and score > time_slot1[0] and score > time_slot2[0]
-        )
-
-    return sorted(time_slots)
-
-def _get_score(preferences: DataFrame, workshops: Iterable[str]) -> int:
-    return sum(
-        non_zero_scores[0]
-        for participants_scores in zip(*(preferences[workshop] for workshop in workshops))
-        if (non_zero_scores := tuple(s for s in participants_scores if s)) and len(non_zero_scores) == 1
-    )
 
 def _add_time_table(
         time_slots_per_time_table: int,
-        time_slots: list[TimeSlot],
+        time_slots_in_descending_order: list[TimeSlot],
         finished_time_tables: list[TimeTable],
         unfinished_time_tables: list[UnfinishedTimeTable],
         new_time_slot_index: int,
         time_table: TimeTable
     ) -> int:
     while (
-        new_time_slot_index > -1 and
-        any(workshop in time_slots[new_time_slot_index][1] for time_slot in time_table[1] for workshop in time_slot[1])
+        new_time_slot_index < len(time_slots_in_descending_order) and
+        any(
+            workshop in time_slots_in_descending_order[new_time_slot_index].workshop_indices
+            for workshop in time_table.workshop_indices
+        )
         ):
-        new_time_slot_index -= 1
-
-    if new_time_slot_index == -1 or len(time_table[1]) >= time_slots_per_time_table:
+        new_time_slot_index += 1
+    
+    if (
+        new_time_slot_index == len(time_slots_in_descending_order) or
+        len(time_table.time_slots) >= time_slots_per_time_table
+        ):
         insort(finished_time_tables, time_table)
     else:
-        stop = new_time_slot_index + 1
-        start = stop - time_slots_per_time_table + len(time_table[1])
+        start = new_time_slot_index
+        stop = start + time_slots_per_time_table - len(time_table.time_slots)
         insort(
             unfinished_time_tables,
-            (
-                time_table[0] + sum(time_slot[0] for time_slot in time_slots[start:stop]),
-                new_time_slot_index,
-                time_table
+            UnfinishedTimeTable(
+                score_upper_bound=time_table.score + sum(
+                    time_slot.score
+                    for time_slot in time_slots_in_descending_order[start:stop]
+                ),
+                next_time_slot_index=new_time_slot_index,
+                time_table=time_table
             )
         )
-
+    
     return new_time_slot_index
+    
+
+def get_time_slots(preferences: ndarray) -> list[TimeSlot]:
+    get_score = partial(_get_score, preferences)
+
+    unfinished_time_slots: set[TimeSlot] = {
+        TimeSlot(get_score((workshop_index,)), (workshop_index,))
+        for workshop_index in range(preferences.shape[1])
+    }
+    time_slots: set[TimeSlot] = set()
+
+    while len(unfinished_time_slots) > 0:
+        time_slot = unfinished_time_slots.pop()
+        time_slots.add(time_slot)
+
+        for workshop_index in range(min(time_slot.workshop_indices)):
+            expanded_workshop_indices = time_slot.workshop_indices + (workshop_index,)
+            score = get_score(expanded_workshop_indices)
+            if score > time_slot.score:
+                unfinished_time_slots.add(TimeSlot(score, expanded_workshop_indices))
+
+    return sorted(time_slots, reverse=True)
+
+def _get_score(preferences: ndarray, workshop_indices: Sequence[WorkshopIndex]) -> int:
+    covered_preferences = preferences[:, workshop_indices]
+    value_counts = (covered_preferences != 0).sum(axis=1)
+    return covered_preferences[value_counts == 1].sum(axis=1).sum()
