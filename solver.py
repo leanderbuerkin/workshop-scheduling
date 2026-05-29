@@ -8,6 +8,10 @@ from numpy import ndarray
 from pandas import Index, read_csv
 from pathlib import Path
 
+# todo: store the workshops covered by expandable and expanded time slots:
+# todo: if any time table with same length and higher score covered those workshops or more
+# todo: Discard the current one (in which order do I need to built these?)
+
 type Workshop = str
 type WorkshopIndex = int
 type TimeSlot = tuple[WorkshopIndex, ...]
@@ -74,38 +78,36 @@ def yield_time_tables(
 
     time_tables_by_length: dict[int, list[tuple[int, TimeTable]]] = defaultdict(list)
     time_tables_by_length[0] = [(0, tuple())]
-    expansions: dict[TimeTable, list[TimeSlot]] = {tuple(): sorted(time_slots, key=lambda ts: time_slot_scores[ts])}
+    expansions: dict[int, dict[TimeTable, frozenset[TimeSlot]]] = {0: {tuple(): frozenset(time_slots)}}
+    time_tables_by_expansions: dict[int, dict[frozenset[TimeSlot], TimeTable]] = {0: {frozenset(time_slots): tuple()}}
     expanded_time_tables: dict[int, list[tuple[int, TimeTable]]] = defaultdict(list)
     time_at_last_safe = time()
 
+    minimal_length = 0
     while len(time_tables_by_length.keys()) > 0:
         for length in list(time_tables_by_length.keys()):
             if len(time_tables_by_length[length]) == 0:
                 del time_tables_by_length[length]
+                if length == minimal_length:
+                    minimal_length += 1 
                 continue
 
             score, time_table = time_tables_by_length[length].pop()
 
-            if time_table not in expansions.keys():
-                expanding_time_slots = set(time_slots)
-                for time_slot in time_table:
-                    expanding_time_slots &= compatible_time_slots[time_slot]
-                expansions[time_table] = sorted(expanding_time_slots, key=lambda ts: time_slot_scores[ts])
+            for new_time_slot in expansions[length][time_table]:
+                new_time_table = time_table + (new_time_slot,)
+                new_score = score + time_slot_scores[new_time_slot]
+                new_expansion = (expansions[length][time_table] - {new_time_slot}).intersection(compatible_time_slots[new_time_slot])
+                if new_expansion in time_tables_by_expansions[length].keys():
+                    if time_tables_by_expansions[length][time]
+                        insort(time_tables_by_length[length + 1], (new_score, new_time_table))
 
-            if len(expansions[time_table]) == 0:
-                del expansions[time_table]
-                insort(expanded_time_tables[length], (score, time_table))
-                if len(expanded_time_tables[length]) > 10:
-                    expanded_time_tables[length].pop(0)
-            else:
-                time_tables_by_length[length].append((score, time_table))
-                new_time_slot = expansions[time_table].pop()
-                insort(time_tables_by_length[length + 1], (
-                    score + time_slot_scores[new_time_slot],
-                    time_table + (new_time_slot,)
-                ))
+            if minimal_length == length:
+                print(", ".join(f"{length}: {len(tts)}" for length, tts in time_tables_by_length.items()))
+            insort(expanded_time_tables[length], (score, time_table))
+            if len(expanded_time_tables[length]) > 10:
+                expanded_time_tables[length].pop(0)
 
-        print(", ".join(f"{length}: {len(tts)}" for length, tts in time_tables_by_length.items()))
         if time() - time_at_last_safe > SECONDS_BETWEEN_SAVES:
             time_at_last_safe = time()
             yield [tt for best_time_tables in expanded_time_tables.values() for tt in best_time_tables[-10:]]
