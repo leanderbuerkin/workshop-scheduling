@@ -63,7 +63,7 @@ def yield_time_tables(
         time_slot_scores: dict[TimeSlot, int]
     ) -> Generator[list[tuple[int, TimeTable]]]:
     time_slots_copy = list(time_slots)
-    compatible_time_slots: dict[TimeSlot, frozenset[TimeSlot]] = dict()
+    compatible_time_slots: dict[TimeSlot, frozenset[TimeSlot]] = {tuple(): frozenset(time_slots)}
     while len(time_slots_copy) > 0:
         time_slot = time_slots_copy.pop()
         compatible_time_slots[time_slot] = frozenset(
@@ -73,7 +73,8 @@ def yield_time_tables(
         )
 
     time_tables_by_length: dict[int, list[tuple[int, TimeTable]]] = defaultdict(list)
-    time_tables_by_length[1] = [(time_slot_scores[time_slot], (time_slot,)) for time_slot in time_slots]
+    time_tables_by_length[0] = [(0, tuple())]
+    expansions: dict[TimeTable, list[TimeSlot]] = {tuple(): sorted(time_slots, key=lambda ts: time_slot_scores[ts])}
     expanded_time_tables: dict[int, list[tuple[int, TimeTable]]] = defaultdict(list)
     time_at_last_safe = time()
 
@@ -83,26 +84,28 @@ def yield_time_tables(
                 del time_tables_by_length[length]
                 continue
 
-            time_table = time_tables_by_length[length].pop()
-            insort(expanded_time_tables[length], time_table)
-            if len(expanded_time_tables[length]) > 10:
-                expanded_time_tables[length].pop(0)
+            score, time_table = time_tables_by_length[length].pop()
 
-            expansions = set(time_slots)
-            for time_slot in time_table[1]:
-                expansions &= compatible_time_slots[time_slot]
+            if time_table not in expansions.keys():
+                expanding_time_slots = set(time_slots)
+                for time_slot in time_table:
+                    expanding_time_slots &= compatible_time_slots[time_slot]
+                expansions[time_table] = sorted(expanding_time_slots, key=lambda ts: time_slot_scores[ts])
 
-            for time_slot in expansions:
+            if len(expansions[time_table]) == 0:
+                del expansions[time_table]
+                insort(expanded_time_tables[length], (score, time_table))
+                if len(expanded_time_tables[length]) > 10:
+                    expanded_time_tables[length].pop(0)
+            else:
+                time_tables_by_length[length].append((score, time_table))
+                new_time_slot = expansions[time_table].pop()
                 insort(time_tables_by_length[length + 1], (
-                    time_table[0] + time_slot_scores[time_slot],
-                    time_table[1] + (time_slot,)
+                    score + time_slot_scores[new_time_slot],
+                    time_table + (new_time_slot,)
                 ))
 
         print(", ".join(f"{length}: {len(tts)}" for length, tts in time_tables_by_length.items()))
-        # if sum(len(tts) for tts in time_tables_by_length.values()) > 10_000_000:
-        #     print("Entered memory saving mode.")
-        #     save_memory = True
-        # todo: Make a save memory switch
         if time() - time_at_last_safe > SECONDS_BETWEEN_SAVES:
             time_at_last_safe = time()
             yield [tt for best_time_tables in expanded_time_tables.values() for tt in best_time_tables[-10:]]
@@ -119,3 +122,4 @@ for time_tables in yield_time_tables(time_slots, time_slot_scores):
             for time_slot in time_table[1]:
                 workshops = ", ".join(str(workshop_names[i]) for i in time_slot)
                 output_file.write(f"\n  {workshops}")
+        output_file.write("\n")
