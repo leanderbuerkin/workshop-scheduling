@@ -1,33 +1,31 @@
-from collections import defaultdict
-from itertools import combinations, groupby
+from heapq import heapify, heappop, heappush
+from itertools import combinations
 from time import time
 
 from numpy import ndarray
 from pandas import read_csv
 from pathlib import Path
 
-# generate_time_tables() is currently AI generated
-# rewrite it to build up time tables from
-
 type Length = int
 type Score = int
+type ScoreUpperBound = int
+
 type WorkshopName = str
 type WorkshopIndex = int
+
 type TimeSlot = frozenset[WorkshopIndex]
 type TimeTable = tuple[TimeSlot, ...]
 
-
 CSV_INPUT_FILE_PATH = Path("example.csv")
-BEST_TIME_TABLE_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH = Path("best_time_table_per_length.md")
-BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH = Path("best_time_tables_per_length.md")
-NUMBER_OF_TIME_TABLES_PER_LENGTH_TO_SAVE_TO_FILE = 100
-SECONDS_BETWEEN_TERMINAL_PRINTS = 0.5
-SECONDS_BETWEEN_SAVES_TO_FILE = 10
-MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY = 100_000  # Is normaly never reached
-IGNORE_FIRST_CSV_COLUMN = True  # E.g. if the names are in the first column
 
-TIME_TABLE_LENGTH_MINIMUM = 5
-TIME_TABLE_LENGTH_MAXIMUM = 12
+TIME_TABLES_TARGET_LENGTH = 20
+MAX_FINAL_TIME_TABLES = 100
+OUTPUT_FILE_PATH = Path("best_time_table_per_length.md")
+
+SECONDS_BETWEEN_TERMINAL_PRINTS = 1
+SECONDS_BETWEEN_SAVES_TO_FILE = 120
+MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY = 1_000_000
+IGNORE_FIRST_CSV_COLUMN = True  # E.g. if the names are in the first column
 
 
 def _read_csv_file(csv_path: Path) -> tuple[ndarray, tuple[WorkshopName, ...]]:
@@ -46,35 +44,48 @@ def _get_time_slots(preferences: ndarray) -> tuple[tuple[Score, TimeSlot], ...]:
     print(f"Generating feasible time slots from {workshops_total_count:,} workshops...")
 
     time_slots: list[tuple[WorkshopIndex, ...]] = [tuple()]
-    new_time_slots: list[tuple[WorkshopIndex, ...]] = list()
     scores: dict[tuple[WorkshopIndex, ...], int] = dict()
 
     for new_workshop_index in range(workshops_total_count):
-        print(f"Workshop {new_workshop_index + 1:,}/{workshops_total_count:,} processed.")
-
-        for time_slot in time_slots:
-            new_time_slot = time_slot + (new_workshop_index,)
-            new_score = _get_time_slot_score(preferences, new_time_slot)
-            scores[new_time_slot] = new_score
+        for time_slot_index in range(len(time_slots)):
+            new_time_slot = time_slots[time_slot_index] + (new_workshop_index,)
+            if new_time_slot not in scores.keys():
+                scores[new_time_slot] = _get_time_slot_score(preferences, new_time_slot)
 
             subsets = (
                 subset
-                for time_slot_length in range(len(new_time_slot))
+                for time_slot_length in range(1, len(new_time_slot))
                 for subset in combinations(new_time_slot, time_slot_length)
             )
             for subset in subsets:
                 if subset not in scores.keys():
                     scores[subset] = _get_time_slot_score(preferences, subset)
-                if scores[subset] >= new_score:
+                if scores[subset] >= scores[new_time_slot]:
                     break
             else:
-                new_time_slots.append(new_time_slot)
-        
-        time_slots.extend(new_time_slots)
-        new_time_slots.clear()
+                time_slots.append(new_time_slot)
 
+    time_slots.remove(tuple())
     print(f"Generated {len(time_slots):,} time slots.")
     return tuple(sorted((scores[time_slot], frozenset(time_slot)) for time_slot in time_slots))
+
+
+def _get_compatible_time_slots(
+        time_slots: tuple[tuple[Score, TimeSlot], ...]
+    ) -> dict[TimeSlot, frozenset[tuple[Score, TimeSlot]]]:
+    """The compatible time slots have always a lower score then the time slot itself."""
+    compatible_time_slots: dict[TimeSlot, frozenset[tuple[Score, TimeSlot]]] = {
+        frozenset(): frozenset(time_slots)
+    }
+    checked_time_slots: list[tuple[Score, TimeSlot]] = list()
+    for time_slot_score, time_slot in sorted(time_slots):
+        compatible_time_slots[time_slot] = frozenset(
+            (other_time_slot_score, other_time_slot)
+            for other_time_slot_score, other_time_slot in checked_time_slots
+            if len(other_time_slot & time_slot) == 0
+        )
+        checked_time_slots.append((time_slot_score, time_slot))
+    return compatible_time_slots
 
 
 def _get_time_slot_score(preferences: ndarray, workshop_indices: tuple[WorkshopIndex, ...]) -> int:
@@ -83,144 +94,93 @@ def _get_time_slot_score(preferences: ndarray, workshop_indices: tuple[WorkshopI
     return covered_preferences[value_counts == 1].sum(axis=1).sum()
 
 
+def get_time_tables(csv_path: Path):
+    preferences, workshop_names = _read_csv_file(csv_path)
+    time_slots = _get_time_slots(preferences)
+    print("Generating Time Tables...")
+    compatible_time_slots = _get_compatible_time_slots(time_slots)
+
+    time_tables: list[tuple[ScoreUpperBound, Score, TimeTable, list[tuple[Score, TimeSlot]]]] = [
+        (0, 0, tuple(), sorted(time_slots))
+    ]
+    heapify(time_tables)
+    finished_time_tables: list[tuple[Score, TimeTable]] = list()
+    lowest_final_score = -1
+    finished_time_tables_count = 0
+    checked_time_tables_count = 0
+    time_at_last_print = 0
+    time_at_last_save = 0
+
+    while len(time_tables) > 0:
+        if len(time_tables) > MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY:
+            time_tables.sort()
+            time_tables = time_tables[:MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY//10]
+            heapify(time_tables)
+
+        score_upper_bound, score, time_table, expansions = heappop(time_tables)
+        score_upper_bound = -score_upper_bound
+        checked_time_tables_count += 1
+        if len(time_table) + len(expansions) < TIME_TABLES_TARGET_LENGTH:
+            continue
+        if score_upper_bound <= lowest_final_score:
+            continue
+        new_time_slot_score, new_time_slot = expansions.pop()
+        missing_time_slots_count = TIME_TABLES_TARGET_LENGTH - len(time_table)
+        score_upper_bound = score + sum(s for s, _ in expansions[-missing_time_slots_count:])
+        # Negative score_upper_bound to use min-heap
+        heappush(time_tables, (-score_upper_bound, score, time_table, expansions))
+
+        new_time_table = time_table + (new_time_slot,)
+        new_score = score + new_time_slot_score
+
+        if len(new_time_table) == TIME_TABLES_TARGET_LENGTH:
+            finished_time_tables_count += 1
+            finished_time_tables.append((new_score, new_time_table))
+            if len(finished_time_tables) > MAX_FINAL_TIME_TABLES:
+                finished_time_tables.sort()
+                finished_time_tables.pop(0)
+                lowest_final_score = finished_time_tables[0][0]
+            continue
+
+        new_expansions = sorted(
+            compatible_time_slots[new_time_slot].intersection(expansions)
+        )
+        new_missing_time_slots_count = TIME_TABLES_TARGET_LENGTH - len(new_time_table)
+        new_score_upper_bound = new_score + sum(s for s, _ in new_expansions[-new_missing_time_slots_count:])
+        # Negative score_upper_bound to use min-heap
+        heappush(time_tables, (-new_score_upper_bound, new_score, new_time_table, new_expansions))
+
+        if time() - time_at_last_print > SECONDS_BETWEEN_TERMINAL_PRINTS:
+            time_at_last_print = time()
+            biggest_length = max(len(tt) for _, _, tt, _ in time_tables)
+            print(
+                f"Checked {checked_time_tables_count:,} time tables, " +
+                f"{finished_time_tables_count:,} time tables with target length were found, " +
+                f"{len(time_tables):,} can be expanded, " +
+                f"the longest contains {biggest_length} time slots."
+            )
+
+        if time() - time_at_last_save > SECONDS_BETWEEN_SAVES_TO_FILE:
+            time_at_last_save = time()
+            if len(finished_time_tables) != 0:
+                _save_time_tables_to_file(workshop_names, finished_time_tables)
+
+
 def _save_time_tables_to_file(
         workshop_names: tuple[WorkshopName, ...],
-        time_tables: dict[Length, list[tuple[Score, frozenset[WorkshopIndex], TimeTable]]]
+        time_tables: list[tuple[int, TimeTable]]
     ):
-    time_tables_count = sum(len(tts) for tts in time_tables.values())
-    with open(BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH, "w") as output_file:
+    with open(OUTPUT_FILE_PATH, "w") as output_file:
         output_file.write("# Best Time Tables\n")
-        output_file.write(
-            "\nCheckout the " +
-            str(BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH) +
-            " which contains only the best time table per length."
-        )
-    with open(BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH, "a") as output_file:
-        for length in sorted(time_tables.keys(), reverse=True):
-            output_file.write(f"\n\n## Length {length}")
-            for score, _, time_table in sorted(time_tables[length], reverse=True):
-                output_file.write(f"\n\nScore {score:.2f} Length {len(time_table)}:")
-                for time_slot in time_table:
-                    workshops = ", ".join(str(workshop_names[workshop_index]) for workshop_index in time_slot)
-                    output_file.write(f"\n  {workshops}")
-        output_file.write("\n")
-    print(
-        f"Saved {time_tables_count:,} time tables to file " \
-        f"{BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH}."
-    )
-
-    with open(BEST_TIME_TABLE_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH, "w") as output_file:
-        output_file.write("# Best Time Table Per Length\n")
-        output_file.write(
-            "\nCheckout the " +
-            str(BEST_TIME_TABLES_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH) +
-            " which contains all " +
-            str(NUMBER_OF_TIME_TABLES_PER_LENGTH_TO_SAVE_TO_FILE) +
-            " best time tables per length."
-        )
-    with open(BEST_TIME_TABLE_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH, "a") as output_file:
-        for length in sorted(time_tables.keys(), reverse=True):
-            score, _, time_table = max(time_tables[length])
+        for score, time_table in sorted(time_tables, reverse=True):
             output_file.write(f"\n\nScore {score:.2f} Length {len(time_table)}:")
             for time_slot in time_table:
                 workshops = ", ".join(str(workshop_names[workshop_index]) for workshop_index in time_slot)
                 output_file.write(f"\n  {workshops}")
         output_file.write("\n")
     print(
-        f"Saved {time_tables_count:,} time tables to file " \
-        f"{BEST_TIME_TABLE_PER_LENGTH_OUTPUT_MARKDOWN_FILE_PATH}."
+        f"Saved {len(time_tables):,} time tables to file " \
+        f"{OUTPUT_FILE_PATH}."
     )
 
-def _get_compatible_time_slots(
-        time_slots: tuple[tuple[Score, TimeSlot], ...]
-    ) -> dict[TimeSlot, frozenset[tuple[Score, TimeSlot]]]:
-    compatible_time_slots: dict[TimeSlot, frozenset[tuple[Score, TimeSlot]]] = dict()
-    checked_time_slots: list[tuple[Score, TimeSlot]] = list()
-    # not using reverse=True because time_slots are maybe already sorted
-    for score, time_slot in sorted(time_slots):
-        compatible_time_slots[time_slot] = frozenset(
-            (other_score, other_time_slot)
-            for other_score, other_time_slot in checked_time_slots
-            if len(other_time_slot & time_slot) == 0
-        )
-        checked_time_slots.append((score, time_slot))
-    return compatible_time_slots
-
-def generate_time_tables(csv_path: Path):
-    preferences, workshop_names = _read_csv_file(csv_path)
-    time_slots = _get_time_slots(preferences)
-    print("Generating Time Tables...")
-    compatible_time_slots = _get_compatible_time_slots(time_slots)
-
-    finished_time_tables: list[tuple[Score, frozenset[WorkshopIndex], TimeTable]] = list()
-    time_tables: dict[Length, list[tuple[Score, TimeTable, frozenset[WorkshopIndex], list[tuple[Score, TimeSlot]]]]] = defaultdict(list)
-    time_tables[0].append((0, tuple(), frozenset(), sorted(time_slots)))
-
-    time_at_last_print = time()
-    time_at_last_save = time()
-
-    while sum(len(tts) for tts in time_tables.values()) > 0:
-        for length in sorted(time_tables.keys()):
-            if len(time_tables[length]) == 0:
-                del time_tables[length]
-                continue
-            time_tables[length].sort()
-            score, time_table, covered_workshops, expansions = time_tables[length][-1]
-            if len(expansions) == 0 or len(time_table) == TIME_TABLE_LENGTH_MAXIMUM:
-                time_tables[length].pop()
-                continue
-    
-    
-            new_time_slot_score, new_time_slot = expansions.pop()
-            new_score = score + new_time_slot_score
-            new_covered_workshops = covered_workshops.union(new_time_slot)
-            new_time_table = time_table + (new_time_slot,)
-    
-            pareto_optimal = True
-            index = 0
-            while index < len(finished_time_tables):
-                other_score, other_covered_workshops, other_time_table = finished_time_tables[index]
-                if (
-                    len(new_time_table) <= len(other_time_table) and
-                    new_score >= other_score and
-                    other_covered_workshops.issubset(new_covered_workshops)
-                    ):
-                    del finished_time_tables[index]
-                    continue
-                elif (
-                    len(other_time_table) <= len(new_time_table) and
-                    other_score >= new_score and
-                    new_covered_workshops.issubset(other_covered_workshops)
-                    ):
-                    pareto_optimal = False
-                index += 1
-    
-            if not pareto_optimal:
-                continue
-    
-            if  TIME_TABLE_LENGTH_MINIMUM <= len(new_time_table) <= TIME_TABLE_LENGTH_MAXIMUM:
-                finished_time_tables.append((new_score, new_covered_workshops, new_time_table))
-            new_expansions = set(time_slots)
-            for time_slot in new_time_table:
-                new_expansions &= compatible_time_slots[time_slot]
-            time_tables[len(new_time_table)].append((
-                new_score, new_time_table, new_covered_workshops, sorted(new_expansions)
-            ))
-
-            if len(time_tables[length]) > MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY:
-                time_tables[length] = sorted(time_tables[length])[-MAXIMUM_TIME_TABLES_FOR_MEMORY_SAFETY//10:]
-
-        if time() - time_at_last_print > SECONDS_BETWEEN_TERMINAL_PRINTS:
-            time_at_last_print = time()
-            print(f"{sum(len(tts) for tts in time_tables.values()):,} time tables expandable, " \
-                  f"{len(finished_time_tables):,} good ones found.")
-
-        if time() - time_at_last_save > SECONDS_BETWEEN_SAVES_TO_FILE:
-            time_at_last_save = time()
-            _save_time_tables_to_file(
-                workshop_names, 
-                {length: sorted(tts) for length, tts in groupby(finished_time_tables, key=lambda tt: len(tt[2]))}
-            )
-
-
-generate_time_tables(CSV_INPUT_FILE_PATH)
+get_time_tables(CSV_INPUT_FILE_PATH)
